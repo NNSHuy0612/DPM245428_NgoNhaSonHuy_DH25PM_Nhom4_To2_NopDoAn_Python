@@ -1,33 +1,35 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
-import mysql.connector
+import pyodbc
 from datetime import datetime
+import threading
 
-# KHAI BÁO VÀ KẾT NỐI CSDL
-def connect_db():
-    """Hàm kết nối MySQL."""
+# HÀM KẾT NỐI CSDL
+def get_connection():
+    """Trả về một kết nối pyodbc tới SQL Server."""
     try:
-        conn = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="", # <-- Thay bằng password MySQL của bạn
-            database="qlbanhang" 
+        conn = pyodbc.connect(
+            "DRIVER={SQL Server};"
+            "SERVER=.\\MSSQLSERVER03;"
+            "DATABASE=QLBanHang;"
+            "Trusted_Connection=yes;"
         )
         return conn
-    except mysql.connector.Error as err:
-        messagebox.showerror("Lỗi CSDL", f"Lỗi: {err}. Vui lòng kiểm tra MySQL.")
+    except pyodbc.Error as ex:
+        sqlstate = ex.args[0]
+        messagebox.showerror("Lỗi Kết Nối CSDL", f"Không thể kết nối đến SQL Server:\n{sqlstate}")
         return None
 
-# HÀM TẢI DỮ LIỆU
+connect_db = get_connection
 
+# HÀM TẢI DỮ LIỆU
 san_pham_data = {}
 
 def load_all_data():
     """Tải dữ liệu Sản phẩm từ CSDL và cập nhật Treeview."""
     global san_pham_data
-    san_pham_data = {} # Xóa dữ liệu cũ
+    san_pham_data = {} 
     
-    # Xóa dữ liệu cũ trên Treeview SP
     for item in tree_sp.get_children():
         tree_sp.delete(item)
 
@@ -36,16 +38,14 @@ def load_all_data():
     cur = conn.cursor()
     
     try:
-        cur.execute("SELECT masp, tensp, giasp, soluongton FROM SanPham")
+        cur.execute("SELECT masp, tensp, giasp, soluongton FROM SanPham ORDER BY masp") 
         rows = cur.fetchall()
         for row in rows:
             masp, tensp, giasp, soluongton = row
-            # Lưu dữ liệu vào dictionary để dùng cho chức năng bán hàng
             san_pham_data[masp] = (tensp, giasp, soluongton)
-            # Chèn vào Treeview Sản phẩm
-            tree_sp.insert("", tk.END, values=row)
+            display_row = (masp, tensp, f"{giasp:,.0f}", soluongton) 
+            tree_sp.insert("", tk.END, values=display_row)
             
-        # Cập nhật Combobox bán hàng
         combo_sp['values'] = [f"{masp} - {data[0]}" for masp, data in san_pham_data.items()]
         
     except Exception as e:
@@ -53,27 +53,35 @@ def load_all_data():
     finally:
         conn.close()
 
-# ====================================================================
+
 # HÀM XỬ LÝ: QUẢN LÝ SẢN PHẨM (CRUD)
-# ====================================================================
 
 def clear_input_sp():
-    """Xóa nội dung các trường nhập liệu Sản phẩm."""
-    entry_ma_sp.config(state='normal')
+    """Xóa nội dung các trường nhập liệu Sản phẩm và đặt lại trạng thái."""
+    entry_ma_sp.config(state='normal') 
     entry_ma_sp.delete(0, tk.END)
     entry_ten_sp.delete(0, tk.END)
     entry_gia_sp.delete(0, tk.END)
     entry_soluongton.delete(0, tk.END)
+    entry_ma_sp.config(state='disabled') 
+
 
 def them_sp():
-    """Thêm Sản phẩm mới vào CSDL."""
-    masp = entry_ma_sp.get().strip()
+    """Thêm Sản phẩm mới vào CSDL. masp được CSDL tự tạo (IDENTITY)."""
+    
     tensp = entry_ten_sp.get().strip()
     giasp = entry_gia_sp.get().strip()
     soluongton = entry_soluongton.get().strip()
     
-    if not masp or not tensp or not giasp or not soluongton:
-        messagebox.showwarning("Thiếu Dữ Liệu", "Vui lòng nhập đầy đủ Mã, Tên, Giá và Số lượng tồn.")
+    if not tensp or not giasp or not soluongton:
+        messagebox.showwarning("Thiếu Dữ Liệu", "Vui lòng nhập đầy đủ Tên, Giá và Số lượng tồn.")
+        return
+    
+    try:
+        giasp = float(giasp)
+        soluongton = int(soluongton)
+    except ValueError:
+        messagebox.showerror("Lỗi Nhập Liệu", "Giá bán và Số lượng tồn phải là số.")
         return
 
     conn = connect_db()
@@ -81,20 +89,15 @@ def them_sp():
     cur = conn.cursor()
 
     try:
-        # Kiểm tra masp trùng
-        cur.execute("SELECT masp FROM SanPham WHERE masp = %s", (masp,))
-        if cur.fetchone():
-             messagebox.showerror("Lỗi Thêm", "Mã Sản phẩm đã tồn tại.")
-             return
-             
-        sql = "INSERT INTO SanPham (masp, tensp, giasp, soluongton) VALUES (%s, %s, %s, %s)"
-        cur.execute(sql, (masp, tensp, giasp, soluongton))
+        sql = "INSERT INTO SanPham (tensp, giasp, soluongton) VALUES (?, ?, ?)"
+        cur.execute(sql, (tensp, giasp, soluongton))
         conn.commit()
+        
         messagebox.showinfo("Thành công", "Đã thêm Sản phẩm mới.")
         load_all_data()
         clear_input_sp()
-    except mysql.connector.Error as err:
-        messagebox.showerror("Lỗi Thêm", f"Lỗi MySQL: {err}")
+    except pyodbc.Error as err: 
+        messagebox.showerror("Lỗi Thêm", f"Lỗi SQL Server: {err}")
     except Exception as e:
         messagebox.showerror("Lỗi Thêm", str(e))
     finally:
@@ -110,28 +113,41 @@ def sua_sp_select(event):
 
     clear_input_sp()
     
+    raw_giasp = values[2].replace(',', '') 
+    
+    entry_ma_sp.config(state='normal') 
     entry_ma_sp.insert(0, values[0]) 
     entry_ten_sp.insert(0, values[1]) 
-    entry_gia_sp.insert(0, values[2]) 
+    entry_gia_sp.insert(0, raw_giasp) 
     entry_soluongton.insert(0, values[3]) 
     
-    entry_ma_sp.config(state='disabled') # Khóa Mã SP khi sửa
+    entry_ma_sp.config(state='disabled') 
 
 def luu_sp():
     """Cập nhật thông tin Sản phẩm (UPDATE)."""
+    entry_ma_sp.config(state='normal') 
     masp = entry_ma_sp.get() 
+    entry_ma_sp.config(state='disabled') 
+    
     tensp = entry_ten_sp.get().strip()
     giasp = entry_gia_sp.get().strip()
     soluongton = entry_soluongton.get().strip()
     
-    if entry_ma_sp.cget('state') != 'disabled' or not masp:
-         messagebox.showwarning("Lỗi", "Vui lòng chọn Sản phẩm cần cập nhật.")
-         return
+    if not masp:
+        messagebox.showwarning("Lỗi", "Vui lòng chọn Sản phẩm cần cập nhật.")
+        return
 
     if not tensp or not giasp or not soluongton:
         messagebox.showwarning("Thiếu Dữ Liệu", "Vui lòng nhập đầy đủ thông tin.")
         return
-    
+        
+    try:
+        giasp = float(giasp)
+        soluongton = int(soluongton)
+    except ValueError:
+        messagebox.showerror("Lỗi Nhập Liệu", "Giá bán và Số lượng tồn phải là số.")
+        return
+        
     conn = connect_db()
     if conn is None: return
     cur = conn.cursor()
@@ -139,8 +155,8 @@ def luu_sp():
     try:
         sql = """
             UPDATE SanPham 
-            SET tensp=%s, giasp=%s, soluongton=%s
-            WHERE masp=%s
+            SET tensp=?, giasp=?, soluongton=?
+            WHERE masp=?
         """
         cur.execute(sql, (tensp, giasp, soluongton, masp))
         conn.commit()
@@ -159,7 +175,7 @@ def xoa_sp():
         messagebox.showwarning("Chưa chọn", "Hãy chọn một Sản phẩm cần xóa.")
         return
     
-    masp = tree_sp.item(selected_item, 'values')[0]
+    masp = tree_sp.item(selected_item, 'values')[0] 
 
     confirm = messagebox.askyesno("Xác nhận", f"Bạn có chắc muốn xóa Sản phẩm có Mã: {masp}?")
     if not confirm:
@@ -170,21 +186,20 @@ def xoa_sp():
     cur = conn.cursor()
     
     try:
-        sql = "DELETE FROM SanPham WHERE masp=%s"
+        sql = "DELETE FROM SanPham WHERE masp=?"
         cur.execute(sql, (masp,))
         conn.commit()
         messagebox.showinfo("Thành công", "Đã xóa Sản phẩm.")
         load_all_data()
         clear_input_sp()
     except Exception as e:
-        messagebox.showerror("Lỗi Xóa", str(e))
+        messagebox.showerror("Lỗi Xóa", f"Lỗi: {str(e)}\n(Kiểm tra xem Sản phẩm có đang tồn tại trong các Đơn hàng không.)") 
     finally:
         conn.close()
 
 
-# HÀM XỬ LÝ: LẬP ĐƠN HÀNG (BÁN HÀNG)
+# HÀM LẬP ĐƠN HÀNG 
 
-# Danh sách CTDH tạm thời: [(masp, tensp, giasp, soluong)]
 cthd_temp = []
 
 def update_cthd_tree():
@@ -197,7 +212,7 @@ def update_cthd_tree():
         masp, tensp, giasp, soluong = item
         thanh_tien = float(giasp) * int(soluong)
         tong_tien += thanh_tien
-        tree_cthd.insert("", tk.END, values=(masp, tensp, f"{giasp:,.0f}", soluong, f"{thanh_tien:,.0f}"))
+        tree_cthd.insert("", tk.END, values=(masp, tensp, f"{float(giasp):,.0f}", soluong, f"{thanh_tien:,.0f}"))
 
     lbl_tong_tien.config(text=f"TỔNG THANH TOÁN: {tong_tien:,.0f} VND")
 
@@ -210,12 +225,11 @@ def them_sp_vao_don():
         return
     
     try:
-        # Lấy masp từ chuỗi (ví dụ: "101 - Bánh mì" -> 101)
         masp = int(selected_sp_str.split(' - ')[0])
         soluong = int(entry_soluong_ban.get())
         if soluong <= 0:
-             messagebox.showwarning("Lỗi", "Số lượng phải lớn hơn 0.")
-             return
+            messagebox.showwarning("Lỗi", "Số lượng phải lớn hơn 0.")
+            return
     except ValueError:
         messagebox.showerror("Lỗi", "Số lượng không hợp lệ.")
         return
@@ -226,7 +240,6 @@ def them_sp_vao_don():
 
     tensp, giasp, soluongton = san_pham_data[masp]
     
-    # 1. Kiểm tra tổng số lượng có vượt tồn kho không
     new_soluong = soluong
     found = False
     for i, item in enumerate(cthd_temp):
@@ -236,10 +249,9 @@ def them_sp_vao_don():
             break
             
     if new_soluong > soluongton:
-         messagebox.showwarning("Lỗi Tồn Kho", f"Số lượng tối đa có thể bán là {soluongton}.")
-         return
+        messagebox.showwarning("Lỗi Tồn Kho", f"Số lượng tối đa có thể bán là {soluongton}.")
+        return
 
-    # 2. Thêm/Cập nhật vào danh sách tạm thời
     if found:
         cthd_temp[i] = (masp, tensp, giasp, new_soluong)
     else:
@@ -250,12 +262,11 @@ def them_sp_vao_don():
     entry_soluong_ban.insert(0, "1")
 
 def lap_don_hang():
-    """Lưu đơn hàng vào CSDL và cập nhật tồn kho (Khách hàng mặc định: 0/Lẻ)."""
+    """Lưu đơn hàng vào CSDL và cập nhật tồn kho."""
     if not cthd_temp:
         messagebox.showwarning("Lỗi", "Đơn hàng rỗng.")
         return
         
-    # Tính tổng tiền
     tong_tien = sum(float(item[2]) * int(item[3]) for item in cthd_temp)
 
     conn = connect_db()
@@ -263,38 +274,42 @@ def lap_don_hang():
     cur = conn.cursor()
     
     try:
-        
         ngaydat = datetime.now().strftime('%Y-%m-%d')
-        
-        sql_dh = "INSERT INTO DonHang (ngaydat, tongtien) VALUES (%s, %s)"
-        cur.execute(sql_dh, (ngaydat, tong_tien))
-        
-        madh = cur.lastrowid
+        makh_val = None              
+        sql_dh = "INSERT INTO DonHang (ngaydat, tongtien, makh) VALUES (?, ?, ?); SELECT SCOPE_IDENTITY()"
+        cur.execute(sql_dh, (ngaydat, tong_tien, makh_val))              
+        if cur.nextset():
+            madh_raw = cur.fetchone()
+        else:
+            raise Exception("Không thể chuyển đến tập kết quả SELECT SCOPE_IDENTITY().")
+
+        madh = int(madh_raw[0]) if madh_raw is not None and madh_raw[0] is not None else None
+
         if madh is None:
-             raise Exception("Không thể lấy Mã Đơn Hàng mới. Kiểm tra IDENTITY/AUTO_INCREMENT trong CSDL.")
+            raise Exception("Lỗi: Mã Đơn Hàng mới là NULL sau khi chèn.")
         
-        # 2. Thêm vào bảng CTHD và Cập nhật SanPham
         for masp, _, giasp, soluong in cthd_temp:
-            # Thêm vào CTHD
-            sql_cthd = "INSERT INTO CTHD (madh, masp, soluong, dongia) VALUES (%s, %s, %s, %s)"
+            sql_cthd = "INSERT INTO CTHD (madh, masp, soluong, dongia) VALUES (?, ?, ?, ?)"
             cur.execute(sql_cthd, (madh, masp, soluong, giasp))
             
-            # Cập nhật tồn kho SanPham
-            sql_update_sp = "UPDATE SanPham SET soluongton = soluongton - %s WHERE masp = %s"
+            sql_update_sp = "UPDATE SanPham SET soluongton = soluongton - ? WHERE masp = ?"
             cur.execute(sql_update_sp, (soluong, masp))
             
-        conn.commit()
+        conn.commit() 
+        
         messagebox.showinfo("Thành công", f"Đã lập thành công Đơn hàng #{madh}. Tổng tiền: {tong_tien:,.0f} VND")
         
-        # 3. Làm mới giao diện
         clear_don_hang()
-        load_all_data() # Cập nhật lại tồn kho
+        load_all_data() 
 
     except Exception as e:
-        conn.rollback()
+        # Rollback nếu có lỗi
+        if conn:
+            conn.rollback() 
         messagebox.showerror("Lỗi Lập Đơn Hàng", str(e))
     finally:
         conn.close()
+        
 def xoa_sp_trong_don():
     """Xóa sản phẩm đã chọn khỏi danh sách tạm thời ."""
     selected_item = tree_cthd.focus()
@@ -312,6 +327,7 @@ def xoa_sp_trong_don():
     cthd_temp = [item for item in cthd_temp if item[0] != masp_can_xoa]
     
     update_cthd_tree()
+    
 def clear_don_hang():
     """Làm mới giao diện Lập Đơn hàng."""
     global cthd_temp
@@ -319,19 +335,65 @@ def clear_don_hang():
     update_cthd_tree()
     entry_soluong_ban.delete(0, tk.END)
     entry_soluong_ban.insert(0, "1")
+def reset_sp_db_task():
+    """Tác vụ CSDL nặng nề chạy trong luồng nền."""
+    conn = connect_db()
+    if conn is None: 
+        return
+    cur = conn.cursor()
+
+    try:
+        cur.execute("BEGIN TRANSACTION")
+        
+        # Xóa CTHD (để không còn khóa ngoại)
+        cur.execute("DELETE FROM CTHD")
+        
+        # Xóa SanPham
+        cur.execute("DELETE FROM SanPham")
+        
+        # Reset  SanPham
+        cur.execute("DBCC CHECKIDENT ('SanPham', RESEED, 0)")
+        
+        conn.commit()
+        
+        # THÔNG BÁO VÀ TẢI DỮ LIỆU CẦN CHẠY TRÊN LUỒNG CHÍNH
+        root.after(0, lambda: messagebox.showinfo("Thành công", "Đã xóa toàn bộ Sản phẩm và reset Mã SP về 1."))
+        root.after(0, load_all_data)
+        root.after(0, clear_input_sp)
+        
+    except pyodbc.Error as err: 
+        conn.rollback()
+        root.after(0, lambda: messagebox.showerror("Lỗi CSDL", f"Không thể reset bảng Sản phẩm. Lỗi SQL: {err}"))
+    except Exception as e:
+        conn.rollback()
+        root.after(0, lambda: messagebox.showerror("Lỗi", str(e)))
+    finally:
+        conn.close()
+
+def reset_sp_table():
+    """Kiểm tra xác nhận và khởi động tác vụ reset CSDL trong luồng nền."""
     
+    confirm = messagebox.askyesno(
+        "XÁC NHẬN RESET", 
+        "CẢNH BÁO: Thao tác này sẽ XÓA TOÀN BỘ dữ liệu Sản phẩm và RESET Mã SP về 1.\n\nBạn có chắc chắn muốn tiếp tục không?"
+    )
+    if not confirm:
+        return
 
-# TKINTER
+    # Khởi tạo và chạy luồng nền
+    reset_thread = threading.Thread(target=reset_sp_db_task)
+    reset_thread.start()  
 
+# TKINTER GUI
 root = tk.Tk()
-root.title("QUẢN LÝ BÁN HÀNG ")
+root.title("QUẢN LÝ BÁN HÀNG")
 root.geometry("1100x650") 
 root.resizable(False, False)
 main_frame = tk.Frame(root)
 main_frame.pack(padx=10, pady=10, fill="both", expand=True)
 
 
-#  QUẢN LÝ SẢN PHẨM 
+# --- QUẢN LÝ SẢN PHẨM ---
 frame_sp = tk.Frame(main_frame, bd=2, relief=tk.GROOVE)
 frame_sp.pack(side=tk.LEFT, padx=10, fill="y", expand=False)
 
@@ -344,6 +406,7 @@ frame_input_sp.pack(pady=5, padx=5, fill="x")
 tk.Label(frame_input_sp, text="Mã SP:", width=10).grid(row=0, column=0, padx=5, pady=2, sticky="w")
 entry_ma_sp = tk.Entry(frame_input_sp, width=20)
 entry_ma_sp.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+entry_ma_sp.config(state='disabled') # Khóa Mã SP khi Thêm mới
 
 tk.Label(frame_input_sp, text="Tên SP:", width=10).grid(row=1, column=0, padx=5, pady=2, sticky="w")
 entry_ten_sp = tk.Entry(frame_input_sp, width=20)
@@ -365,6 +428,7 @@ tk.Button(frame_btn_sp, text="Thêm", width=10, command=them_sp).grid(row=0, col
 tk.Button(frame_btn_sp, text="Lưu/Cập nhật", width=12, command=luu_sp).grid(row=0, column=1, padx=5)
 tk.Button(frame_btn_sp, text="Làm mới", width=10, command=clear_input_sp).grid(row=0, column=2, padx=5)
 tk.Button(frame_btn_sp, text="Xóa", width=10, command=xoa_sp).grid(row=0, column=3, padx=5)
+tk.Button(frame_btn_sp, text="Reset Dữ Liệu", width=15, bg="red", fg="white", command=reset_sp_table).grid(row=1, column=1, columnspan=2, pady=5)
 
 # DANH SÁCH SP
 lbl_list_sp = tk.Label(frame_sp, text="Danh sách Sản phẩm", font=("Arial", 10, "bold"))
@@ -376,7 +440,7 @@ tree_frame_sp.pack(padx=5, pady=5, fill='both', expand=True)
 tree_scroll_sp = ttk.Scrollbar(tree_frame_sp, orient="vertical")
 tree_scroll_sp.pack(side="right", fill="y")
 
-tree_sp = ttk.Treeview(tree_frame_sp, columns=("masp", "tensp", "giasp", "soluongton"), show="headings", yscrollcommand=tree_scroll_sp.set)
+tree_sp = ttk.Treeview(tree_frame_sp, columns=("masp", "tensp", "giasp", "soluongton"),show="headings", yscrollcommand=tree_scroll_sp.set)
 tree_scroll_sp.config(command=tree_sp.yview)
 
 tree_sp.heading("masp", text="Mã SP")
@@ -392,7 +456,7 @@ tree_sp.column("soluongton", width=70, anchor=tk.CENTER)
 tree_sp.pack(fill="both", expand=True)
 tree_sp.bind('<<TreeviewSelect>>', sua_sp_select)
 
-# LẬP ĐƠN HÀNG 
+# --- LẬP ĐƠN HÀNG ---
 frame_dh = tk.Frame(main_frame, bd=2, relief=tk.GROOVE)
 frame_dh.pack(side=tk.LEFT, padx=10, fill="both", expand=True)
 
@@ -413,19 +477,18 @@ entry_soluong_ban.grid(row=0, column=3, padx=5, pady=5, sticky="w")
 
 tk.Button(frame_add_sp, text="➕ Thêm", command=them_sp_vao_don, width=10).grid(row=0, column=4, padx=10, pady=5)
 
-# Sự kiện khi chọn Sản phẩm, hiển thị giá và tồn kho
 def on_sp_select(event):
     selected_sp_str = combo_sp.get()
     if not selected_sp_str: return
     try:
-        masp = int(selected_sp_str.split(' - ')[0])
+        masp = int(selected_sp_str.split(' - ')[0]) 
         if masp in san_pham_data:
             tensp, giasp, soluongton = san_pham_data[masp]
-            lbl_sp_info.config(text=f"Giá: {giasp:,.0f} VND | Tồn: {soluongton}")
+            lbl_sp_info.config(text=f"Giá: {float(giasp):,.0f} VND | Tồn: {soluongton}")
         else:
             lbl_sp_info.config(text="Giá: N/A | Tồn: N/A")
     except:
-         lbl_sp_info.config(text="Giá: N/A | Tồn: N/A")
+        lbl_sp_info.config(text="Giá: N/A | Tồn: N/A")
 
 
 combo_sp.bind('<<ComboboxSelected>>', on_sp_select)
@@ -433,7 +496,7 @@ lbl_sp_info = tk.Label(frame_add_sp, text="Giá: N/A | Tồn: N/A", fg="gray")
 lbl_sp_info.grid(row=1, column=1, padx=5, sticky="w", columnspan=3)
 
 #BẢNG CTDH
-lbl_list_cthd = tk.Label(frame_dh, text="CTDH", font=("Arial", 10, "bold"))
+lbl_list_cthd = tk.Label(frame_dh, text="Chi tiết Đơn hàng", font=("Arial", 10, "bold"))
 lbl_list_cthd.pack(pady=(5, 2))
 
 tree_frame_cthd = tk.Frame(frame_dh)
@@ -442,7 +505,8 @@ tree_frame_cthd.pack(padx=10, pady=5, fill='both', expand=True)
 tree_scroll_cthd = ttk.Scrollbar(tree_frame_cthd, orient="vertical")
 tree_scroll_cthd.pack(side="right", fill="y")
 
-tree_cthd = ttk.Treeview(tree_frame_cthd, columns=("masp", "tensp", "giasp", "soluong", "thanhtien"), show="headings", yscrollcommand=tree_scroll_cthd.set)
+tree_cthd = ttk.Treeview(tree_frame_cthd, columns=("masp", "tensp", "giasp", "soluong", "thanhtien"), 
+                         show="headings", yscrollcommand=tree_scroll_cthd.set)
 tree_scroll_cthd.config(command=tree_cthd.yview)
 
 tree_cthd.heading("masp", text="Mã SP")
@@ -464,9 +528,10 @@ frame_footer_dh = tk.Frame(frame_dh)
 frame_footer_dh.pack(pady=10, padx=10, fill="x")
 lbl_tong_tien = tk.Label(frame_footer_dh, text="TỔNG THANH TOÁN: 0 VND", font=("Arial", 14, "bold"), fg="red")
 lbl_tong_tien.pack(side=tk.LEFT, padx=10)
-tk.Button(frame_footer_dh, text=" Xóa SP", width=10,  command=xoa_sp_trong_don).pack(side=tk.RIGHT, padx=5)
+tk.Button(frame_footer_dh, text=" Xóa SP", width=10, command=xoa_sp_trong_don).pack(side=tk.RIGHT, padx=5)
 tk.Button(frame_footer_dh, text=" Làm mới", width=10, command=clear_don_hang).pack(side=tk.RIGHT, padx=5)
-tk.Button(frame_footer_dh, text=" LẬP ĐƠN", width=15, bg="green", fg="white", font=("Arial", 12, "bold"), command=lap_don_hang).pack(side=tk.RIGHT, padx=15)
-load_all_data() 
+tk.Button(frame_footer_dh, text=" LẬP ĐƠN", width=15, bg="green", fg="white", 
+          font=("Arial", 12, "bold"), command=lap_don_hang).pack(side=tk.RIGHT, padx=15)
 
+load_all_data() 
 root.mainloop()
