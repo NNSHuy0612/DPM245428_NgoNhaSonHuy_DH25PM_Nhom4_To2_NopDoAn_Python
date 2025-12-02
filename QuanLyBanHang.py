@@ -10,7 +10,7 @@ def get_connection():
     try:
         conn = pyodbc.connect(
             "DRIVER={SQL Server};"
-            "SERVER=.\\MSSQLSERVER03;"
+            "SERVER=MT0515\SQLEXPRESS;"
             "DATABASE=QLBanHang;"
             "Trusted_Connection=yes;"
         )
@@ -428,7 +428,6 @@ tk.Button(frame_btn_sp, text="Thêm", width=10, command=them_sp).grid(row=0, col
 tk.Button(frame_btn_sp, text="Lưu/Cập nhật", width=12, command=luu_sp).grid(row=0, column=1, padx=5)
 tk.Button(frame_btn_sp, text="Làm mới", width=10, command=clear_input_sp).grid(row=0, column=2, padx=5)
 tk.Button(frame_btn_sp, text="Xóa", width=10, command=xoa_sp).grid(row=0, column=3, padx=5)
-tk.Button(frame_btn_sp, text="Reset Dữ Liệu", width=15, bg="red", fg="white", command=reset_sp_table).grid(row=1, column=1, columnspan=2, pady=5)
 
 # DANH SÁCH SP
 lbl_list_sp = tk.Label(frame_sp, text="Danh sách Sản phẩm", font=("Arial", 10, "bold"))
