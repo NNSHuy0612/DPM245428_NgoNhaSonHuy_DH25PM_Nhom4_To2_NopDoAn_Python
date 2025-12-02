@@ -1,16 +1,16 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import pyodbc
 from datetime import datetime
 import threading
+import openpyxl
+import pandas as pd
 
-# HÀM KẾT NỐI CSDL
 def get_connection():
-    """Trả về một kết nối pyodbc tới SQL Server."""
     try:
         conn = pyodbc.connect(
             "DRIVER={SQL Server};"
-            "SERVER=MT0515\SQLEXPRESS;"
+            "SERVER=MT0505\SQLEXPRESS;"
             "DATABASE=QLBanHang;"
             "Trusted_Connection=yes;"
         )
@@ -22,13 +22,13 @@ def get_connection():
 
 connect_db = get_connection
 
-# HÀM TẢI DỮ LIỆU
 san_pham_data = {}
+khach_hang_data = {}
 
 def load_all_data():
-    """Tải dữ liệu Sản phẩm từ CSDL và cập nhật Treeview."""
-    global san_pham_data
+    global san_pham_data, khach_hang_data
     san_pham_data = {} 
+    khach_hang_data = {None: "Khách lẻ (Không lưu)"}
     
     for item in tree_sp.get_children():
         tree_sp.delete(item)
@@ -39,8 +39,8 @@ def load_all_data():
     
     try:
         cur.execute("SELECT masp, tensp, giasp, soluongton FROM SanPham ORDER BY masp") 
-        rows = cur.fetchall()
-        for row in rows:
+        rows_sp = cur.fetchall()
+        for row in rows_sp:
             masp, tensp, giasp, soluongton = row
             san_pham_data[masp] = (tensp, giasp, soluongton)
             display_row = (masp, tensp, f"{giasp:,.0f}", soluongton) 
@@ -48,16 +48,20 @@ def load_all_data():
             
         combo_sp['values'] = [f"{masp} - {data[0]}" for masp, data in san_pham_data.items()]
         
+        cur.execute("SELECT makh, hoten, sdt FROM KhachHang ORDER BY makh") 
+        rows_kh = cur.fetchall()
+        for row in rows_kh:
+            makh, hoten, sdt = row
+            khach_hang_data[makh] = (hoten,sdt)
+        
+        combo_kh['values'] = [khach_hang_data[None]] + [f"{makh} - {data[0]}" for makh, data in khach_hang_data.items() if makh is not None]
+
     except Exception as e:
         messagebox.showerror("Lỗi Tải Dữ Liệu", str(e))
     finally:
         conn.close()
 
-
-# HÀM XỬ LÝ: QUẢN LÝ SẢN PHẨM (CRUD)
-
 def clear_input_sp():
-    """Xóa nội dung các trường nhập liệu Sản phẩm và đặt lại trạng thái."""
     entry_ma_sp.config(state='normal') 
     entry_ma_sp.delete(0, tk.END)
     entry_ten_sp.delete(0, tk.END)
@@ -67,7 +71,6 @@ def clear_input_sp():
 
 
 def them_sp():
-    """Thêm Sản phẩm mới vào CSDL. masp được CSDL tự tạo (IDENTITY)."""
     
     tensp = entry_ten_sp.get().strip()
     giasp = entry_gia_sp.get().strip()
@@ -104,7 +107,6 @@ def them_sp():
         conn.close()
 
 def sua_sp_select(event):
-    """Đổ dữ liệu từ Treeview lên Form để sửa."""
     selected_item = tree_sp.focus()
     if not selected_item: return
     
@@ -124,7 +126,6 @@ def sua_sp_select(event):
     entry_ma_sp.config(state='disabled') 
 
 def luu_sp():
-    """Cập nhật thông tin Sản phẩm (UPDATE)."""
     entry_ma_sp.config(state='normal') 
     masp = entry_ma_sp.get() 
     entry_ma_sp.config(state='disabled') 
@@ -169,7 +170,6 @@ def luu_sp():
         conn.close()
 
 def xoa_sp():
-    """Xóa Sản phẩm khỏi CSDL (DELETE)."""
     selected_item = tree_sp.focus()
     if not selected_item:
         messagebox.showwarning("Chưa chọn", "Hãy chọn một Sản phẩm cần xóa.")
@@ -197,13 +197,48 @@ def xoa_sp():
     finally:
         conn.close()
 
+def them_khach_hang():
+    tenkh = entry_ten_kh.get().strip()
+    sdt = entry_sdt_kh.get().strip()
+    
+    if not tenkh or not sdt:
+        messagebox.showwarning("Thiếu Dữ Liệu", "Vui lòng nhập đầy đủ Tên và SĐT Khách hàng.")
+        return
+        
+    conn = connect_db()
+    if conn is None: return
+    cur = conn.cursor()
 
-# HÀM LẬP ĐƠN HÀNG 
+    try:
+        cur.execute("SELECT makh FROM KhachHang WHERE sdt=?", (sdt,))
+        if cur.fetchone():
+            messagebox.showwarning("Trùng Lặp", "Số điện thoại này đã tồn tại.")
+            return
+
+        sql = "INSERT INTO KhachHang (hoten, sdt) VALUES (?, ?); SELECT SCOPE_IDENTITY()"
+        cur.execute(sql, (hoten, sdt))
+        
+        new_makh_raw = cur.fetchone()
+        new_makh = int(new_makh_raw[0])
+        conn.commit()
+        
+        messagebox.showinfo("Thành công", f"Đã thêm Khách hàng mới (Mã: {new_makh}).")
+        
+        load_all_data() 
+        combo_kh.set(f"{new_makh} - {hoten}")
+        entry_ten_kh.delete(0, tk.END)
+        entry_sdt_kh.delete(0, tk.END)
+        
+    except pyodbc.Error as err: 
+        messagebox.showerror("Lỗi Thêm", f"Lỗi SQL Server: {err}")
+    except Exception as e:
+        messagebox.showerror("Lỗi Thêm", str(e))
+    finally:
+        conn.close()
 
 cthd_temp = []
 
 def update_cthd_tree():
-    """Cập nhật Treeview Chi tiết Đơn hàng tạm thời và Tổng tiền."""
     for item in tree_cthd.get_children():
         tree_cthd.delete(item)
     
@@ -215,9 +250,77 @@ def update_cthd_tree():
         tree_cthd.insert("", tk.END, values=(masp, tensp, f"{float(giasp):,.0f}", soluong, f"{thanh_tien:,.0f}"))
 
     lbl_tong_tien.config(text=f"TỔNG THANH TOÁN: {tong_tien:,.0f} VND")
+    
+def xuatExecel(madh, cthd_data, tong_tien):
+    
+    ten_file_mac_dinh = f"HoaDon_{madh}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+    file_path = filedialog.asksaveasfilename(
+        defaultextension=".xlsx",
+        initialfile=ten_file_mac_dinh,
+        filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")]
+    )
+    
+    if not file_path:
+        return False 
+    
+    try:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"HD #{madh}"
 
+        ws['A1'] = "CỬA HÀNG BÁN LẺ XYZ"
+        ws['A2'] = "HOÁ ĐƠN BÁN HÀNG"
+        ws['A3'] = f"Mã Đơn Hàng: {madh}"
+        ws['A4'] = f"Ngày: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
+        
+        headers = ["STT", "Mã SP", "Tên Sản phẩm", "Đơn Giá", "Số lượng", "Thành Tiền"]
+        ws.append([])
+        ws.append(headers)
+        
+        row_num = 0
+        for i, item in enumerate(cthd_data):
+            masp, tensp, giasp, soluong = item
+            thanh_tien = float(giasp) * int(soluong)
+            
+            display_row = [
+                i + 1,
+                masp, 
+                tensp, 
+                float(giasp), 
+                soluong, 
+                thanh_tien
+            ]
+            ws.append(display_row)
+            row_num = ws.max_row
+        
+        ws.cell(row=row_num + 2, column=5, value="TỔNG CỘNG:")
+        ws.cell(row=row_num + 2, column=6, value=tong_tien).number_format = '#,##0'
+        
+        for row in ws.iter_rows(min_row=7, max_row=ws.max_row):
+            row[3].number_format = '#,##0' 
+            row[5].number_format = '#,##0'
+
+        for col in ws.columns:
+            max_length = 0
+            column = col[0].column_letter
+            for cell in col:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = (max_length + 2)
+            ws.column_dimensions[column].width = adjusted_width
+            
+        wb.save(file_path)
+        messagebox.showinfo("Xuất Excel Thành Công", f"Đã xuất hóa đơn #{madh} ra file:\n{file_path}")
+        return True
+    
+    except Exception as e:
+        messagebox.showerror("Lỗi Xuất Excel", f"Không thể xuất file Excel:\n{str(e)}")
+        return False
+      
 def them_sp_vao_don():
-    """Thêm sản phẩm đã chọn vào danh sách tạm thời."""
     
     selected_sp_str = combo_sp.get()
     if not selected_sp_str:
@@ -262,22 +365,29 @@ def them_sp_vao_don():
     entry_soluong_ban.insert(0, "1")
 
 def lap_don_hang():
-    """Lưu đơn hàng vào CSDL và cập nhật tồn kho."""
     if not cthd_temp:
         messagebox.showwarning("Lỗi", "Đơn hàng rỗng.")
         return
         
     tong_tien = sum(float(item[2]) * int(item[3]) for item in cthd_temp)
 
+    selected_kh_str = combo_kh.get()
+    makh_val = None
+    if selected_kh_str and "Khách lẻ" not in selected_kh_str:
+        try:
+            makh_val = int(selected_kh_str.split(' - ')[0])
+        except ValueError:
+            makh_val = None
+            
     conn = connect_db()
     if conn is None: return
     cur = conn.cursor()
     
     try:
         ngaydat = datetime.now().strftime('%Y-%m-%d')
-        makh_val = None              
         sql_dh = "INSERT INTO DonHang (ngaydat, tongtien, makh) VALUES (?, ?, ?); SELECT SCOPE_IDENTITY()"
-        cur.execute(sql_dh, (ngaydat, tong_tien, makh_val))              
+        cur.execute(sql_dh, (ngaydat, tong_tien, makh_val)) 
+        
         if cur.nextset():
             madh_raw = cur.fetchone()
         else:
@@ -296,14 +406,14 @@ def lap_don_hang():
             cur.execute(sql_update_sp, (soluong, masp))
             
         conn.commit() 
-        
         messagebox.showinfo("Thành công", f"Đã lập thành công Đơn hàng #{madh}. Tổng tiền: {tong_tien:,.0f} VND")
-        
+        data_to_export = list(cthd_temp)
+        xuatExecel(madh, data_to_export ,tong_tien)
+
         clear_don_hang()
         load_all_data() 
 
     except Exception as e:
-        # Rollback nếu có lỗi
         if conn:
             conn.rollback() 
         messagebox.showerror("Lỗi Lập Đơn Hàng", str(e))
@@ -311,7 +421,6 @@ def lap_don_hang():
         conn.close()
         
 def xoa_sp_trong_don():
-    """Xóa sản phẩm đã chọn khỏi danh sách tạm thời ."""
     selected_item = tree_cthd.focus()
     if not selected_item:
         messagebox.showwarning("Chưa chọn", "Hãy chọn một mục cần xóa khỏi đơn hàng.")
@@ -329,14 +438,14 @@ def xoa_sp_trong_don():
     update_cthd_tree()
     
 def clear_don_hang():
-    """Làm mới giao diện Lập Đơn hàng."""
     global cthd_temp
     cthd_temp = []
     update_cthd_tree()
     entry_soluong_ban.delete(0, tk.END)
     entry_soluong_ban.insert(0, "1")
+    combo_kh.set("Khách lẻ ")
+    
 def reset_sp_db_task():
-    """Tác vụ CSDL nặng nề chạy trong luồng nền."""
     conn = connect_db()
     if conn is None: 
         return
@@ -345,18 +454,14 @@ def reset_sp_db_task():
     try:
         cur.execute("BEGIN TRANSACTION")
         
-        # Xóa CTHD (để không còn khóa ngoại)
         cur.execute("DELETE FROM CTHD")
         
-        # Xóa SanPham
         cur.execute("DELETE FROM SanPham")
         
-        # Reset  SanPham
         cur.execute("DBCC CHECKIDENT ('SanPham', RESEED, 0)")
         
         conn.commit()
         
-        # THÔNG BÁO VÀ TẢI DỮ LIỆU CẦN CHẠY TRÊN LUỒNG CHÍNH
         root.after(0, lambda: messagebox.showinfo("Thành công", "Đã xóa toàn bộ Sản phẩm và reset Mã SP về 1."))
         root.after(0, load_all_data)
         root.after(0, clear_input_sp)
@@ -371,7 +476,6 @@ def reset_sp_db_task():
         conn.close()
 
 def reset_sp_table():
-    """Kiểm tra xác nhận và khởi động tác vụ reset CSDL trong luồng nền."""
     
     confirm = messagebox.askyesno(
         "XÁC NHẬN RESET", 
@@ -380,11 +484,9 @@ def reset_sp_table():
     if not confirm:
         return
 
-    # Khởi tạo và chạy luồng nền
     reset_thread = threading.Thread(target=reset_sp_db_task)
-    reset_thread.start()  
+    reset_thread.start()    
 
-# TKINTER GUI
 root = tk.Tk()
 root.title("QUẢN LÝ BÁN HÀNG")
 root.geometry("1100x650") 
@@ -392,21 +494,18 @@ root.resizable(False, False)
 main_frame = tk.Frame(root)
 main_frame.pack(padx=10, pady=10, fill="both", expand=True)
 
-
-# --- QUẢN LÝ SẢN PHẨM ---
 frame_sp = tk.Frame(main_frame, bd=2, relief=tk.GROOVE)
 frame_sp.pack(side=tk.LEFT, padx=10, fill="y", expand=False)
 
 tk.Label(frame_sp, text="QUẢN LÝ SẢN PHẨM", font=("Arial", 14, "bold"), fg="navy").pack(pady=10)
 
-# NHẬP THÔNG TIN SP 
 frame_input_sp = tk.Frame(frame_sp)
 frame_input_sp.pack(pady=5, padx=5, fill="x")
 
 tk.Label(frame_input_sp, text="Mã SP:", width=10).grid(row=0, column=0, padx=5, pady=2, sticky="w")
 entry_ma_sp = tk.Entry(frame_input_sp, width=20)
 entry_ma_sp.grid(row=0, column=1, padx=5, pady=2, sticky="w")
-entry_ma_sp.config(state='disabled') # Khóa Mã SP khi Thêm mới
+entry_ma_sp.config(state='disabled')
 
 tk.Label(frame_input_sp, text="Tên SP:", width=10).grid(row=1, column=0, padx=5, pady=2, sticky="w")
 entry_ten_sp = tk.Entry(frame_input_sp, width=20)
@@ -420,7 +519,6 @@ tk.Label(frame_input_sp, text="Tồn Kho:", width=10).grid(row=3, column=0, padx
 entry_soluongton = tk.Entry(frame_input_sp, width=20)
 entry_soluongton.grid(row=3, column=1, padx=5, pady=2, sticky="w")
 
-# NÚT CHỨC NĂNG 
 frame_btn_sp = tk.Frame(frame_sp)
 frame_btn_sp.pack(pady=10, padx=5)
 
@@ -429,7 +527,6 @@ tk.Button(frame_btn_sp, text="Lưu/Cập nhật", width=12, command=luu_sp).grid
 tk.Button(frame_btn_sp, text="Làm mới", width=10, command=clear_input_sp).grid(row=0, column=2, padx=5)
 tk.Button(frame_btn_sp, text="Xóa", width=10, command=xoa_sp).grid(row=0, column=3, padx=5)
 
-# DANH SÁCH SP
 lbl_list_sp = tk.Label(frame_sp, text="Danh sách Sản phẩm", font=("Arial", 10, "bold"))
 lbl_list_sp.pack(pady=(5, 2))
 
@@ -455,13 +552,11 @@ tree_sp.column("soluongton", width=70, anchor=tk.CENTER)
 tree_sp.pack(fill="both", expand=True)
 tree_sp.bind('<<TreeviewSelect>>', sua_sp_select)
 
-# --- LẬP ĐƠN HÀNG ---
 frame_dh = tk.Frame(main_frame, bd=2, relief=tk.GROOVE)
 frame_dh.pack(side=tk.LEFT, padx=10, fill="both", expand=True)
 
 tk.Label(frame_dh, text="BÁN HÀNG TẠI QUẦY", font=("Arial", 14, "bold"), fg="darkgreen").pack(pady=10)
 
-# THÊM SẢN PHẨM
 frame_add_sp = tk.Frame(frame_dh)
 frame_add_sp.pack(pady=5, padx=10, fill="x")
 
@@ -494,7 +589,28 @@ combo_sp.bind('<<ComboboxSelected>>', on_sp_select)
 lbl_sp_info = tk.Label(frame_add_sp, text="Giá: N/A | Tồn: N/A", fg="gray")
 lbl_sp_info.grid(row=1, column=1, padx=5, sticky="w", columnspan=3)
 
-#BẢNG CTDH
+frame_kh = tk.Frame(frame_dh, bd=1, relief=tk.SOLID, padx=5, pady=5)
+frame_kh.pack(pady=10, padx=10, fill="x")
+tk.Label(frame_kh, text="THÔNG TIN KHÁCH HÀNG", font=("Arial", 10, "bold")).pack(pady=5)
+
+frame_kh_input = tk.Frame(frame_kh)
+frame_kh_input.pack()
+
+tk.Label(frame_kh_input, text="Khách hàng hiện tại:", width=18).grid(row=0, column=0, padx=5, pady=2, sticky="w")
+combo_kh = ttk.Combobox(frame_kh_input, width=30, state="readonly")
+combo_kh.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+combo_kh.set("Khách lẻ (Không lưu)")
+
+tk.Label(frame_kh_input, text="Tên KH Mới:", width=18).grid(row=1, column=0, padx=5, pady=2, sticky="w")
+entry_ten_kh = tk.Entry(frame_kh_input, width=32)
+entry_ten_kh.grid(row=1, column=1, padx=5, pady=2, sticky="w")
+
+tk.Label(frame_kh_input, text="SĐT Mới:", width=18).grid(row=2, column=0, padx=5, pady=2, sticky="w")
+entry_sdt_kh = tk.Entry(frame_kh_input, width=32)
+entry_sdt_kh.grid(row=2, column=1, padx=5, pady=2, sticky="w")
+
+tk.Button(frame_kh_input, text="Lưu KH Mới", command=them_khach_hang, width=15).grid(row=1, column=2, rowspan=2, padx=10)
+
 lbl_list_cthd = tk.Label(frame_dh, text="Chi tiết Đơn hàng", font=("Arial", 10, "bold"))
 lbl_list_cthd.pack(pady=(5, 2))
 
@@ -505,7 +621,7 @@ tree_scroll_cthd = ttk.Scrollbar(tree_frame_cthd, orient="vertical")
 tree_scroll_cthd.pack(side="right", fill="y")
 
 tree_cthd = ttk.Treeview(tree_frame_cthd, columns=("masp", "tensp", "giasp", "soluong", "thanhtien"), 
-                         show="headings", yscrollcommand=tree_scroll_cthd.set)
+                             show="headings", yscrollcommand=tree_scroll_cthd.set)
 tree_scroll_cthd.config(command=tree_cthd.yview)
 
 tree_cthd.heading("masp", text="Mã SP")
@@ -522,7 +638,6 @@ tree_cthd.column("thanhtien", width=120, anchor=tk.E)
 
 tree_cthd.pack(fill="both", expand=True)
 
-#TỔNG TIỀN
 frame_footer_dh = tk.Frame(frame_dh)
 frame_footer_dh.pack(pady=10, padx=10, fill="x")
 lbl_tong_tien = tk.Label(frame_footer_dh, text="TỔNG THANH TOÁN: 0 VND", font=("Arial", 14, "bold"), fg="red")
